@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     
     # Lambda Simulator configurations
     LAMBDA_SERVICE_URL: str = os.getenv("LAMBDA_SERVICE_URL", "http://localhost:8001")
+    LAMBDA_API_KEY: str = os.getenv("LAMBDA_API_KEY", "super-secret-api-key")
     
     @property
     def DATABASE_URL(self) -> str:
