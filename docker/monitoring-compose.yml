@@ -23,6 +23,8 @@ services:
     restart: always
     ports:
       - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     networks:
@@ -36,3 +38,6 @@ services:
 networks:
   ticket_futbol_red_privada:
     external: true
+
+volumes:
+  grafana_data:
