@@ -1,10 +1,11 @@
 name: ticket_futbol
 
 services:
-  # Database layer: PostgreSQL
+  # Database layer: PostgreSQL (Private network only)
   db:
     image: postgres:15-alpine
     container_name: ticket_db
+    restart: always
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -13,43 +14,69 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - red_privada
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d ticket_futbol_db"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # Cache and messaging broker layer: Redis
+  # Cache and messaging broker layer: Redis (Private network only)
   redis:
     image: redis:7-alpine
     container_name: ticket_redis
+    restart: always
     ports:
       - "6379:6379"
+    networks:
+      - red_privada
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # Serverless functions app layer: Simulated AWS Lambdas (Payment & QR Generator)
+  # Serverless functions app layer: Simulated AWS Lambdas (Private network only)
   lambda-runner:
     build:
       context: ..
       dockerfile: docker/Dockerfile.lambda
     container_name: ticket_lambda_runner
+    restart: always
     ports:
       - "8001:8001"
+    environment:
+      - LAMBDA_API_KEY=super-secret-api-key
     volumes:
       - ../static:/app/static
+    networks:
+      - red_privada
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
     depends_on:
       - redis
 
-  # Core Backend API & Gateway application layer (FastAPI)
+  # Core Backend API & Gateway application layer (FastAPI) (Public and Private networks)
   api:
     build:
       context: ..
       dockerfile: docker/Dockerfile.api
     container_name: ticket_api_gateway
+    restart: always
     ports:
       - "8000:8000"
     environment:
@@ -61,8 +88,17 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - LAMBDA_SERVICE_URL=http://lambda-runner:8001
+      - LAMBDA_API_KEY=super-secret-api-key
     volumes:
       - ../static:/app/static
+    networks:
+      - red_publica
+      - red_privada
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
     depends_on:
       db:
         condition: service_healthy
@@ -71,12 +107,13 @@ services:
       lambda-runner:
         condition: service_started
 
-  # Queue processing application layer: Celery Worker
+  # Queue processing application layer: Celery Worker (Private network only)
   celery-worker:
     build:
       context: ..
       dockerfile: docker/Dockerfile.celery
     container_name: ticket_celery_worker
+    restart: always
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -86,8 +123,16 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - LAMBDA_SERVICE_URL=http://lambda-runner:8001
+      - LAMBDA_API_KEY=super-secret-api-key
     volumes:
       - ../static:/app/static
+    networks:
+      - red_privada
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
     depends_on:
       db:
         condition: service_healthy
@@ -98,3 +143,9 @@ services:
 
 volumes:
   postgres_data:
+
+networks:
+  red_publica:
+    driver: bridge
+  red_privada:
+    driver: bridge
