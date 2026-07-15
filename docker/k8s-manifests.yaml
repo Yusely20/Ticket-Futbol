@@ -112,7 +112,7 @@ spec:
       containers:
         - name: lambda-runner
           image: ticket_lambda_runner:latest # Built from local dockerfile
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           env:
             - name: LAMBDA_API_KEY
               value: "super-secret-api-key"
@@ -156,7 +156,7 @@ spec:
       containers:
         - name: api
           image: ticket_api_gateway:latest # Built from local dockerfile
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           env:
             - name: POSTGRES_USER
               value: "postgres"
@@ -230,7 +230,7 @@ spec:
       containers:
         - name: celery-worker
           image: ticket_celery_worker:latest # Built from local dockerfile
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           env:
             - name: POSTGRES_USER
               value: "postgres"
