@@ -1,4 +1,5 @@
 import os
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -17,7 +18,16 @@ class Settings(BaseSettings):
     
     # Redis configurations
     REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
-    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_PORT: int = 6379
+
+    @field_validator("REDIS_PORT", mode="before")
+    @classmethod
+    def parse_redis_port(cls, v):
+        if isinstance(v, str):
+            if "tcp://" in v:
+                return int(v.split(":")[-1])
+            return int(v)
+        return v
     
     # Celery configurations
     CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
