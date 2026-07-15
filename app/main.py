@@ -198,3 +198,7 @@ def redirect_to_portal():
     Redirects root requests to the modern interactive HTML dashboard.
     """
     return RedirectResponse(url="/static/index.html")
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
