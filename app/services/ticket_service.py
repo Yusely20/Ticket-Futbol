@@ -33,7 +33,7 @@ class TicketService:
                     raise HTTPException(status_code=400, detail=f"Seat {seat.seat_number} is already booked")
 
                 # Acquire distributed lock
-                acquired = seat_lock_service.acquire_lock(seat_id, user_id, expire_seconds=300)
+                acquired = seat_lock_service.acquire_lock(seat_id, user_id, expire_seconds=15)
                 if not acquired:
                     raise HTTPException(
                         status_code=409, 
