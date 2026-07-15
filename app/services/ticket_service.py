@@ -33,7 +33,7 @@ class TicketService:
                     raise HTTPException(status_code=400, detail=f"Seat {seat.seat_number} is already booked")
 
                 # Acquire distributed lock
-                acquired = seat_lock_service.acquire_lock(seat_id, user_id, expire_seconds=300)
+                acquired = seat_lock_service.acquire_lock(seat_id, user_id, expire_seconds=15)
                 if not acquired:
                     raise HTTPException(
                         status_code=409, 
@@ -73,7 +73,7 @@ class TicketService:
             logger.error(f"Error creating order: {e}")
             raise HTTPException(status_code=500, detail="Internal server error creating order")
 
-    async def confirm_payment_and_complete_order(self, db: Session, order_id: int, user_id: int, card_info: dict) -> dict:
+    async def confirm_payment_and_complete_order(self, db: Session, order_id: int, user_id: int, card_info: dict, correlation_id: str = None) -> dict:
         """
         Completes payment processing via simulated Lambda and generates tickets + async QR background task.
         """
@@ -81,22 +81,10 @@ class TicketService:
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
         
-        if order.status != "PENDING":
+        if order.status not in ["PENDING", "PENDING_PAYMENT"]:
             raise HTTPException(status_code=400, detail=f"Order is already in state: {order.status}")
-
-        # Fetch locked seats for this event (find which ones are LOCKED and will be purchased)
-        # In a real app, you would have an OrderItem table. Here, we query seats locked by this order flow
-        # For simplicity, we get the list of seats that were locked in Redis or are locked in the DB
-        # To identify them cleanly, we will pass the list of seats associated with the purchase
-        # Let's query seats for this event that are currently locked
-        # Actually, since we don't have an OrderItem table, we'll fetch seats from the database. Let's make sure
-        # we know which seats were requested. Let's design the service to fetch seats based on the event and user.
-        # Wait, a cleaner approach is that the user passes the seat_ids or we query the ticket/seat locks.
-        # Let's write the order to match: we can query the seats for this event that have status = 'LOCKED'.
-        # However, to avoid conflicts between different users' locked seats in the DB, let's query seats where status='LOCKED'
-        # and we verify they are locked in Redis by this user.
-        
-        # Query all seats of the event that are in state LOCKED
+ 
+        # Fetch locked seats for this event
         locked_db_seats = db.query(Seat).filter(Seat.event_id == order.event_id, Seat.status == "LOCKED").all()
         
         # Filter seats owned in Redis by this user
@@ -108,19 +96,56 @@ class TicketService:
                 if owner == str(user_id):
                     user_seats.append(s)
             else:
-                # No redis fallback: just take them
                 user_seats.append(s)
-
+ 
         if not user_seats:
-            # If no seats locked, fail order
             order.status = "CANCELLED"
             db.commit()
             raise HTTPException(status_code=400, detail="No locked seats found for this transaction. Lock might have expired.")
-
+ 
         # 3. Call the Lambda payment endpoint
-        payment_result = await payment_processor_service.process_payment(order.id, order.total_price, card_info)
+        payment_result = await payment_processor_service.process_payment(order.id, order.total_price, card_info, correlation_id=correlation_id)
         
-        if payment_result.get("success"):
+        # Import here to avoid circular imports
+        from app.tasks.celery_worker import generate_ticket_task
+
+        if payment_result.get("circuit_broken"):
+            # Circuit Breaker: degrade order to PENDING_PAYMENT and queue generation anyway
+            order.status = "PENDING_PAYMENT"
+            
+            created_tickets = []
+            for seat in user_seats:
+                # Keep seat as LOCKED to avoid reservation loss
+                seat.status = "LOCKED"
+                
+                ticket = Ticket(
+                    order_id=order.id,
+                    seat_id=seat.id,
+                    is_validated=False
+                )
+                db.add(ticket)
+                created_tickets.append(ticket)
+            
+            db.commit()
+
+            # Trigger Celery tasks passing the correlation ID
+            for ticket in created_tickets:
+                generate_ticket_task.apply_async(args=[ticket.id], kwargs={"correlation_id": correlation_id})
+                
+            # Release Redis locks
+            for seat in user_seats:
+                seat_lock_service.release_lock(seat.id, user_id)
+                
+            logger.warning(f"Circuit Breaker: payment failed or timed out. Order {order.id} degraded to PENDING_PAYMENT.")
+            return {
+                "success": False,
+                "degraded": True,
+                "message": "La pasarela de pago no respondió a tiempo. Tu orden quedó en estado 'Pendiente de Pago' y los tickets se procesarán en cola.",
+                "order_id": order.id,
+                "tickets": [t.ticket_uuid for t in created_tickets]
+            }
+
+        elif payment_result.get("success"):
             # Payment Success! Update order and seats
             order.status = "PAID"
             
@@ -139,13 +164,10 @@ class TicketService:
                 created_tickets.append(ticket)
             
             db.commit() # Commit so ticket records get IDs
-
-            # Import here to avoid circular imports
-            from app.tasks.celery_worker import generate_ticket_task
-            
+ 
             # 4. Trigger asynchronous QR Code generation tasks via Celery worker
             for ticket in created_tickets:
-                generate_ticket_task.delay(ticket.id)
+                generate_ticket_task.apply_async(args=[ticket.id], kwargs={"correlation_id": correlation_id})
                 
             # 5. Release Redis locks
             for seat in user_seats:

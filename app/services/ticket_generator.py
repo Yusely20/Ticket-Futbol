@@ -8,7 +8,7 @@ class TicketGeneratorService:
     def __init__(self):
         self.lambda_url = f"{settings.LAMBDA_SERVICE_URL}/generate_ticket"
 
-    def generate_qr_code_lambda(self, ticket_uuid: str, ticket_url: str) -> str:
+    def generate_qr_code_lambda(self, ticket_uuid: str, ticket_url: str, correlation_id: str = None) -> str:
         """
         Invokes the simulated QR Ticket Generator Lambda function.
         Synchronous HTTP client because it is called inside Celery tasks (which run in worker threads).
@@ -18,9 +18,15 @@ class TicketGeneratorService:
             "ticket_url": ticket_url
         }
 
+        headers = {
+            "X-API-KEY": settings.LAMBDA_API_KEY
+        }
+        if correlation_id:
+            headers["X-Correlation-ID"] = correlation_id
+
         try:
-            logger.info(f"Invoking ticket generator Lambda for ticket {ticket_uuid} with URL {ticket_url}")
-            response = httpx.post(self.lambda_url, json=payload, timeout=15.0)
+            logger.info(f"Invoking ticket generator Lambda for ticket {ticket_uuid} with URL {ticket_url} [CorrelationID: {correlation_id}]")
+            response = httpx.post(self.lambda_url, json=payload, headers=headers, timeout=15.0)
             
             if response.status_code == 200:
                 data = response.json()

@@ -8,7 +8,7 @@ class PaymentProcessorService:
     def __init__(self):
         self.lambda_url = f"{settings.LAMBDA_SERVICE_URL}/payment"
 
-    async def process_payment(self, order_id: int, amount: float, card_info: dict) -> dict:
+    async def process_payment(self, order_id: int, amount: float, card_info: dict, correlation_id: str = None) -> dict:
         """
         Invokes the simulated payment processor Lambda function.
         """
@@ -21,10 +21,17 @@ class PaymentProcessorService:
             "cvc": card_info.get("cvc")
         }
 
+        headers = {
+            "X-API-KEY": settings.LAMBDA_API_KEY
+        }
+        if correlation_id:
+            headers["X-Correlation-ID"] = correlation_id
+
         try:
-            logger.info(f"Invoking payment Lambda for order {order_id} with amount {amount}")
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(self.lambda_url, json=payload)
+            logger.info(f"Invoking payment Lambda for order {order_id} with amount {amount} [CorrelationID: {correlation_id}]")
+            # Enforce 2.0 second timeout as required for Circuit Breaker
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.post(self.lambda_url, json=payload, headers=headers)
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -36,6 +43,13 @@ class PaymentProcessorService:
                         "success": False,
                         "message": f"Payment gateway error: HTTP {response.status_code}"
                     }
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            logger.warning(f"Circuit Breaker Triggered: Payment Lambda connection issue or timeout: {e}")
+            return {
+                "success": False,
+                "circuit_broken": True,
+                "message": "Payment gateway timeout - order degraded to PENDING_PAYMENT"
+            }
         except httpx.RequestError as e:
             logger.error(f"Failed to connect to Payment Lambda: {e}")
             # Mock successful payment locally if service is unreachable during standalone test runs

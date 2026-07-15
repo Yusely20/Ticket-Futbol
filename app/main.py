@@ -108,6 +108,11 @@ try:
 except Exception as e:
     logger.error(f"Error initializing database: {e}")
 
+import uuid
+import redis
+from fastapi import Response
+from prometheus_fastapi_instrumentator import Instrumentator
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Plataforma de Boletería Transaccional para Eventos Deportivos - UDLA",
@@ -115,6 +120,51 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# Redis client for rate limiting
+redis_client = redis.Redis(
+    host=settings.REDIS_HOST,
+    port=settings.REDIS_PORT,
+    db=1,
+    decode_responses=True
+)
+
+@app.middleware("http")
+async def add_correlation_id_and_rate_limit(request: Request, call_next):
+    # 1. Correlation ID
+    correlation_id = request.headers.get("X-Correlation-ID")
+    if not correlation_id:
+        correlation_id = str(uuid.uuid4())
+    
+    # Store correlation id in request state
+    request.state.correlation_id = correlation_id
+    
+    # 2. Rate Limiting (limit per IP)
+    # Skip rate limiting for static assets, swagger, and root redirects
+    if not (request.url.path.startswith("/static") or request.url.path.startswith("/docs") or request.url.path == "/" or request.url.path == "/metrics"):
+        client_ip = request.client.host if request.client else "unknown"
+        rate_limit_key = f"rate_limit:{client_ip}:{request.url.path}"
+        try:
+            current_requests = redis_client.incr(rate_limit_key)
+            if current_requests == 1:
+                redis_client.expire(rate_limit_key, 10) # 10 seconds TTL
+            
+            if current_requests > 15: # allow 15 requests/10s
+                logger.warning(f"Rate limit exceeded for IP {client_ip} on path {request.url.path}")
+                return Response(
+                    content='{"detail": "Rate limit exceeded. Try again in a few seconds."}',
+                    status_code=429,
+                    media_type="application/json"
+                )
+        except Exception as e:
+            logger.error(f"Error checking rate limit in Redis: {e}")
+
+    # Process request
+    response = await call_next(request)
+    
+    # Set the correlation header in response
+    response.headers["X-Correlation-ID"] = correlation_id
+    return response
 
 # Set up CORS
 app.add_middleware(
@@ -124,6 +174,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize Prometheus Instrumentator
+Instrumentator().instrument(app).expose(app)
+
 
 # Ensure static directories exist
 os.makedirs("static", exist_ok=True)
@@ -144,3 +198,7 @@ def redirect_to_portal():
     Redirects root requests to the modern interactive HTML dashboard.
     """
     return RedirectResponse(url="/static/index.html")
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
