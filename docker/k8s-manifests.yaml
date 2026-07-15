@@ -168,6 +168,8 @@ spec:
               value: "ticket_futbol_db"
             - name: REDIS_HOST
               value: "redis"
+            - name: REDIS_PORT
+              value: "6379"
             - name: CELERY_BROKER_URL
               value: "redis://redis:6379/0"
             - name: CELERY_RESULT_BACKEND
@@ -242,6 +244,8 @@ spec:
               value: "ticket_futbol_db"
             - name: REDIS_HOST
               value: "redis"
+            - name: REDIS_PORT
+              value: "6379"
             - name: CELERY_BROKER_URL
               value: "redis://redis:6379/0"
             - name: CELERY_RESULT_BACKEND
