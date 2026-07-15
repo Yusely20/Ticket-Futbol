@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.user import User
@@ -30,6 +30,7 @@ def create_ticket_order(
 async def checkout_order(
     order_id: int,
     payment_in: PaymentRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -50,17 +51,20 @@ async def checkout_order(
         "cvc": payment_in.cvc
     }
 
+    correlation_id = getattr(request.state, "correlation_id", None)
+
     result = await ticket_service.confirm_payment_and_complete_order(
         db=db,
         order_id=order_id,
         user_id=current_user.id,
-        card_info=card_info
+        card_info=card_info,
+        correlation_id=correlation_id
     )
     
-    if result["success"]:
+    if result["success"] or result.get("degraded"):
         return PaymentResponse(
-            success=True,
-            transaction_id=result.get("tickets", [""])[0], # Returning first ticket code as reference
+            success=result["success"],
+            transaction_id=result.get("tickets", [""])[0] if result.get("tickets") else None,
             message=result["message"],
             tickets=result.get("tickets", [])
         )
