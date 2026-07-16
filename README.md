@@ -26,22 +26,78 @@ Ticket Fútbol es una solución transaccional premium para la venta y control de
 ## 🚀 Cómo Correr el Proyecto en tu Computadora
 
 ### Requisitos Previos
-Tener instalados **Docker** y **Docker Compose** en tu sistema.
+Tener instalado **Rancher Desktop** (con Kubernetes habilitado) y **kubectl** en tu sistema.
 
-### Instrucciones de Despliegue Rápido
-1. Descarga o clona el proyecto e ingresa a la carpeta raíz.
-2. Construye e inicia todos los contenedores en segundo plano:
+---
+
+### Opción A: Despliegue en Kubernetes (Recomendado / Producción)
+
+1. **Crear archivo de secretos**:
+   Crea un archivo llamado `docker/k8s-secrets.yaml` (este archivo está excluido de Git por seguridad) con el siguiente contenido:
+   ```yaml
+   apiVersion: v1
+   kind: Secret
+   metadata:
+     name: ticket-futbol-secrets
+     namespace: ticket-futbol
+   type: Opaque
+   stringData:
+     postgres-user: "postgres"
+     postgres-password: "postgres"
+     postgres-db: "ticket_futbol_db"
+     lambda-api-key: "super-secret-api-key"
+   ```
+
+2. **Construir imágenes locales**:
+   ```bash
+   # Si usas dockerd en Rancher:
+   docker build -t ticket_lambda_runner:latest -f docker/Dockerfile.lambda .
+   docker build -t ticket_api_gateway:latest -f docker/Dockerfile.api .
+   docker build -t ticket_celery_worker:latest -f docker/Dockerfile.celery .
+   ```
+
+3. **Desplegar en Kubernetes**:
+   ```bash
+   kubectl apply -f docker/k8s-secrets.yaml
+   kubectl apply -f docker/k8s-manifests.yaml
+   ```
+
+4. **Reenvío de puertos (Port-Forward)**:
+   Para acceder localmente, expón los puertos del clúster a tu máquina:
+   ```bash
+   kubectl port-forward svc/api 8000:8000 -n ticket-futbol
+   kubectl port-forward svc/lambda-runner 8001:8001 -n ticket-futbol
+   kubectl port-forward svc/celery-flower 5555:5555 -n ticket-futbol
+   ```
+
+5. **Monitoreo adicional (Prometheus & Grafana en Docker)**:
+   Levanta las herramientas de observabilidad:
+   ```bash
+   docker compose -f docker/monitoring-compose.yml up -d
+   ```
+
+---
+
+### Opción B: Despliegue con Docker Compose (Desarrollo Rápido)
+
+1. Crea o configura tu archivo `.env` en la raíz.
+2. Inicia los servicios:
    ```bash
    docker compose -f docker/docker-compose.yml up --build -d
+   docker compose -f docker/monitoring-compose.yml up -d
    ```
-3. Verifica que todos los servicios estén activos y saludables:
-   ```bash
-   docker compose -f docker/docker-compose.yml ps
-   ```
-4. Abre los siguientes enlaces en tu navegador:
-   * **Portal de Boletería y Administración**: [http://localhost:8000/](http://localhost:8000/)
-   * **Documentación Interactiva (Swagger)**: [http://localhost:8000/docs](http://localhost:8000/docs)
-   * **Simulador de Lambdas**: [http://localhost:8001/docs](http://localhost:8001/docs)
+
+---
+
+### 🌐 Enlaces del Ecosistema
+
+Una vez corriendo, abre estos enlaces en tu navegador:
+* **Portal de Boletería y API Gateway**: [http://localhost:8000/](http://localhost:8000/)
+* **Documentación (Swagger Hub)**: [http://localhost:8000/docs](http://localhost:8000/docs)
+* **Simulador de AWS Lambdas**: [http://localhost:8001/docs](http://localhost:8001/docs)
+* **Gestor de Colas (Celery Flower)**: [http://localhost:5555/](http://localhost:5555/)
+* **Monitoreo de Telemetría (Grafana)**: [http://localhost:3000/](http://localhost:3000/)
+* **Recolector de Métricas (Prometheus)**: [http://localhost:9090/](http://localhost:9090/)
 
 ---
 

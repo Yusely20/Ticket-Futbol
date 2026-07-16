@@ -5,7 +5,7 @@ from celery import Celery
 from celery.signals import after_setup_task_logger
 from app.core.config import settings
 from app.db.database import SessionLocal
-from app.models.ticket import Ticket
+from app.db.base import Ticket
 from app.services.ticket_generator import ticket_generator_service
 import redis
 

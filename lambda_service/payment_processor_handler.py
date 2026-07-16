@@ -23,8 +23,8 @@ def lambda_handler(event, context):
             }
         }
 
-    # Simulate network latency of payment processor API (Stripe/Authorize.Net)
-    time.sleep(1.2)
+    # Simulate latency
+    time.sleep(0.1)
 
     # Simple logic to simulate payment declines
     if card_number.replace(" ", "").startswith("4111"):

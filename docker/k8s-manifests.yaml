@@ -4,9 +4,21 @@ metadata:
   name: ticket-futbol
 
 ---
-# ----------------------------------------------------
-# 1. Database layer: PostgreSQL
-# ----------------------------------------------------
+# Shared storage for QR codes
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qrcodes-pvc
+  namespace: ticket-futbol
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+
+---
+# Database layer: PostgreSQL
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,11 +39,20 @@ spec:
           image: postgres:15-alpine
           env:
             - name: POSTGRES_USER
-              value: "postgres"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: postgres-user
             - name: POSTGRES_PASSWORD
-              value: "postgres"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: postgres-password
             - name: POSTGRES_DB
-              value: "ticket_futbol_db"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: postgres-db
           ports:
             - containerPort: 5432
           resources:
@@ -51,9 +72,7 @@ spec:
     app: db
 
 ---
-# ----------------------------------------------------
-# 2. Cache & Message Broker: Redis
-# ----------------------------------------------------
+# Cache & Message Broker: Redis
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -91,9 +110,7 @@ spec:
     app: redis
 
 ---
-# ----------------------------------------------------
-# 3. Simulated AWS Lambdas: lambda-runner
-# ----------------------------------------------------
+# Simulated AWS Lambdas: lambda-runner
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -115,13 +132,23 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: LAMBDA_API_KEY
-              value: "super-secret-api-key"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: lambda-api-key
           ports:
             - containerPort: 8001
           resources:
             limits:
               cpu: "500m"
               memory: "512Mi"
+          volumeMounts:
+            - name: qrcodes-storage
+              mountPath: /app/static/qrcodes
+      volumes:
+        - name: qrcodes-storage
+          persistentVolumeClaim:
+            claimName: qrcodes-pvc
 ---
 apiVersion: v1
 kind: Service
@@ -135,9 +162,7 @@ spec:
     app: lambda-runner
 
 ---
-# ----------------------------------------------------
-# 4. Core API Gateway: api (N+1 Replicas & Probes)
-# ----------------------------------------------------
+# Core API Gateway: api (N+1 replicas & probes)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -159,13 +184,22 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: POSTGRES_USER
-              value: "postgres"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: postgres-user
             - name: POSTGRES_PASSWORD
-              value: "postgres"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: postgres-password
             - name: POSTGRES_HOST
               value: "db"
             - name: POSTGRES_DB
-              value: "ticket_futbol_db"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: postgres-db
             - name: REDIS_HOST
               value: "redis"
             - name: REDIS_PORT
@@ -177,7 +211,10 @@ spec:
             - name: LAMBDA_SERVICE_URL
               value: "http://lambda-runner:8001"
             - name: LAMBDA_API_KEY
-              value: "super-secret-api-key"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: lambda-api-key
           ports:
             - containerPort: 8000
           resources:
@@ -196,6 +233,13 @@ spec:
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 5
+          volumeMounts:
+            - name: qrcodes-storage
+              mountPath: /app/static/qrcodes
+      volumes:
+        - name: qrcodes-storage
+          persistentVolumeClaim:
+            claimName: qrcodes-pvc
 ---
 apiVersion: v1
 kind: Service
@@ -211,9 +255,7 @@ spec:
     app: api
 
 ---
-# ----------------------------------------------------
-# 5. Queue Worker: celery-worker
-# ----------------------------------------------------
+# Queue Worker: celery-worker
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -235,13 +277,22 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: POSTGRES_USER
-              value: "postgres"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: postgres-user
             - name: POSTGRES_PASSWORD
-              value: "postgres"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: postgres-password
             - name: POSTGRES_HOST
               value: "db"
             - name: POSTGRES_DB
-              value: "ticket_futbol_db"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: postgres-db
             - name: REDIS_HOST
               value: "redis"
             - name: REDIS_PORT
@@ -253,8 +304,61 @@ spec:
             - name: LAMBDA_SERVICE_URL
               value: "http://lambda-runner:8001"
             - name: LAMBDA_API_KEY
-              value: "super-secret-api-key"
+              valueFrom:
+                secretKeyRef:
+                  name: ticket-futbol-secrets
+                  key: lambda-api-key
           resources:
             limits:
               cpu: "500m"
               memory: "512Mi"
+          volumeMounts:
+            - name: qrcodes-storage
+              mountPath: /app/static/qrcodes
+      volumes:
+        - name: qrcodes-storage
+          persistentVolumeClaim:
+            claimName: qrcodes-pvc
+
+---
+# Celery Monitoring Dashboard: celery-flower
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-flower
+  namespace: ticket-futbol
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: celery-flower
+  template:
+    metadata:
+      labels:
+        app: celery-flower
+    spec:
+      containers:
+        - name: celery-flower
+          image: mher/flower:latest
+          env:
+            - name: CELERY_BROKER_URL
+              value: "redis://redis:6379/0"
+          ports:
+            - containerPort: 5555
+          resources:
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: celery-flower
+  namespace: ticket-futbol
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 5555
+      targetPort: 5555
+  selector:
+    app: celery-flower

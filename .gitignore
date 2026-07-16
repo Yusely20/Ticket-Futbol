@@ -5,6 +5,7 @@ __pycache__/
 
 # Local environment configs
 .env
+docker/k8s-secrets.yaml
 .venv
 env/
 venv/

@@ -29,8 +29,8 @@ class PaymentProcessorService:
 
         try:
             logger.info(f"Invoking payment Lambda for order {order_id} with amount {amount} [CorrelationID: {correlation_id}]")
-            # Enforce 2.0 second timeout as required for Circuit Breaker
-            async with httpx.AsyncClient(timeout=2.0) as client:
+            # Enforce 4.0 second timeout as required for Circuit Breaker
+            async with httpx.AsyncClient(timeout=4.0) as client:
                 response = await client.post(self.lambda_url, json=payload, headers=headers)
                 
                 if response.status_code == 200:
