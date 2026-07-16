@@ -7,8 +7,11 @@ services:
     restart: always
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
     ports:
       - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - ticket_futbol_red_privada
     deploy:
@@ -26,7 +29,7 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
     networks:
       - ticket_futbol_red_privada
     deploy:
@@ -41,3 +44,4 @@ networks:
 
 volumes:
   grafana_data:
+  prometheus_data:

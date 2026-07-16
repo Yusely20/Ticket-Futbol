@@ -20,8 +20,8 @@ async def invoke_payment(payload: Request, x_api_key: str = Header(None)):
     """
     verify_api_key(x_api_key)
     
-    # Simulación de Latencia Real (1.5 seconds controlled latency)
-    await asyncio.sleep(1.5)
+    # Simulated latency
+    await asyncio.sleep(0.5)
     
     try:
         event = await payload.json()

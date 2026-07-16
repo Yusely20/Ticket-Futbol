@@ -8,7 +8,7 @@ services:
     restart: always
     environment:
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=ticket_futbol_db
     ports:
       - "5432:5432"
@@ -81,7 +81,7 @@ services:
       - "8000:8000"
     environment:
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_HOST=db
       - POSTGRES_DB=ticket_futbol_db
       - REDIS_HOST=redis
@@ -116,7 +116,7 @@ services:
     restart: always
     environment:
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_HOST=db
       - POSTGRES_DB=ticket_futbol_db
       - REDIS_HOST=redis
@@ -140,6 +140,21 @@ services:
         condition: service_healthy
       lambda-runner:
         condition: service_started
+
+  # Celery monitoring dashboard (Visual queues like RabbitMQ management)
+  flower:
+    image: mher/flower:latest
+    container_name: ticket_flower
+    restart: always
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    networks:
+      - red_privada
+    depends_on:
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:
