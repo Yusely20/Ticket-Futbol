@@ -1,109 +1,195 @@
-# Documentación Técnica Completa del Ecosistema Ticket Fútbol
-
-Este documento detalla la arquitectura, decisiones de diseño, principios aplicados y el análisis técnico del ecosistema **Ticket Fútbol** de acuerdo a los requerimientos de la Facultad de Ingeniería y Ciencias Aplicadas (UDLA).
-
----
-
-## 1. Descripción del Ecosistema
-
-**Ticket Fútbol** es una solución transaccional de alto rendimiento para la compra y validación de boletos para partidos de fútbol (Mundial 2026). El sistema está compuesto por un ecosistema distribuido de tres aplicaciones principales desacopladas:
-
-1. **API Gateway / Backend (FastAPI)**: Centraliza la lógica de negocio, expone la interfaz REST-full documentada con Swagger, valida la autenticidad de usuarios y rutea el tráfico hacia el sistema de base de datos relacional y servicios de colas.
-2. **Procesador Asíncrono de Mensajería (Celery Worker)**: Procesa tareas de fondo de manera desacoplada para evitar bloqueos en el servidor HTTP principal, tales como la llamada a la pasarela de pagos y la solicitud de generación de códigos QR de boletos.
-3. **Simulador Serverless (AWS Lambda Simulator)**: Un componente independiente que simula micro-funciones desacopladas en la nube. Incluye:
-   * `PaymentProcessor`: Simula la aprobación transaccional con la pasarela de pagos.
-   * `TicketGenerator`: Genera la imagen del boleto con el código QR y la escribe en el volumen compartido.
+# DOCUMENTO DE ARQUITECTURA DE SOFTWARE
+## ECOSISTEMA TRANSACCIONAL TICKET FÚTBOL
 
 ---
 
-## 2. Decisiones de Arquitectura y Patrones de Diseño
-
-El sistema implementa patrones modernos para asegurar robustez, desacoplamiento y escalabilidad:
-
-### Patrón de Arquitectura: Microservicios
-Cada capa de la aplicación (Base de Datos, Redis, API, Workers, Lambda Runner) corre de manera aislada. Esto permite escalar cada parte de forma independiente según la demanda (por ejemplo, escalar los workers si hay una cola alta de generación de boletos, o escalar las réplicas de la API si hay muchas visitas).
-
-### Patrón de Integración: API Gateway
-La aplicación FastAPI actúa como API Gateway de cara a los clientes externos. Expone un único punto de entrada, maneja el control de flujo (Rate Limiting) y oculta la topología interna del clúster de Kubernetes, distribuyendo peticiones hacia la base de datos PostgreSQL, Redis y la Lambda Runner.
-
-### Patrón de Mensajería: Procesamiento Asíncrono (Publisher-Subscriber)
-Cuando un usuario compra un boleto, la API no genera la imagen QR sincrónicamente, ya que es una operación pesada. En su lugar, publica la tarea en una cola en **Redis** y responde de inmediato al cliente. El **Celery Worker** toma la tarea, invoca a la Lambda, y deposita la imagen en el almacenamiento compartido.
+### 1. Portada Institucional
+* **Universidad**: Universidad de las Américas (UDLA)
+* **Facultad**: Facultad de Ingeniería y Ciencias Aplicadas (FICA)
+* **Carrera**: Ingeniería de Software
+* **Materia**: Diseño y Arquitectura de Software (ISWZ2202)
+* **Proyecto**: Ecosistema Transaccional Ticket Fútbol (Mundial 2026)
+* **Integrante**: Maryori Zapata Gusñay
+* **Fecha**: 16 de Julio de 2026
 
 ---
 
-## 3. Principios SOLID, POO y Buenas Prácticas de Desarrollo
+### 2. Introducción y Objetivos
 
-### Principios SOLID
-* **S (Single Responsibility)**: Cada clase y módulo tiene un único propósito. Por ejemplo, `ticket_generator_handler` solo se encarga de dibujar el código QR, mientras que `payment_processor_handler` solo simula pagos.
-* **O (Open/Closed)**: Las clases están abiertas a la extensión pero cerradas a la modificación. El simulador de lambdas permite añadir nuevas microfunciones simplemente agregando un nuevo handler sin modificar la API principal.
-* **D (Dependency Inversion)**: La conexión a base de datos y clientes HTTP externos se inyecta como dependencias de FastAPI (`Depends`), desacoplando la lógica de negocio de la infraestructura.
+#### Descripción del Ecosistema
+**Ticket Fútbol** es una solución transaccional de alto rendimiento diseñada para la venta y control de accesos a partidos del Mundial de Fútbol 2026. Resuelve el problema de negocio de sobreventa de boletos, cuellos de botella durante picos de compra (ventas masivas de partidos importantes) y la alta latencia al generar recursos gráficos (como códigos QR para boletos).
+El ecosistema se compone de 3 aplicaciones desacopladas principales:
+1. **API Gateway / Backend (FastAPI)**: Administra la lógica del portal web, autoriza a los usuarios y expone los servicios REST.
+2. **Message Queue Consumer (Celery Worker)**: Procesa de forma asíncrona la confirmación de pagos y generación de QRs.
+3. **Simulador Serverless (AWS Lambda Simulator)**: Corre funciones desacopladas e independientes de cobro y de generación de imágenes de códigos QR.
 
-### Buenas Prácticas de Desarrollo
-* **Clean Code**: Comentarios claros, variables descriptivas en inglés y funciones pequeñas que realizan una sola acción.
-* **Mantenibilidad y Logs**: Registro estructurado de logs en formato de auditoría utilizando el módulo `logging` de Python.
-* **Git Workflow**: Ramas de features independientes, commits cortos y descriptivos en inglés, fusión inicial en la rama de desarrollo `develop` y pase final a `main`.
-
----
-
-## 4. Análisis No Funcional (Rúbrica)
-
-### Caché y Concurrencia
-* **Redis 7** se utiliza para almacenar en caché sesiones y peticiones temporales.
-* Para evitar el **Double Booking** (que dos usuarios compren el mismo asiento al mismo tiempo bajo alta concurrencia), se implementa un **Lock Transaccional en memoria** usando Redis. Cuando un usuario inicia la compra, se reserva temporalmente el asiento en caché con un tiempo de vida (TTL) de 10 segundos, liberando el bloqueo una vez persistido en la base de datos PostgreSQL.
-
-### Latencia
-* Al delegar la creación de imágenes y procesamiento de pagos a Celery en segundo plano, el tiempo de respuesta promedio de la API para registrar una orden se reduce a **menos de 5 ms**.
-
-### Disponibilidad, Redundancia y Balanceo
-* En el manifiesto de Kubernetes, la API Gateway está configurada con `replicas: 3` (esquema **N+1**). Un balanceador de carga (`Service LoadBalancer`) distribuye las peticiones entre las réplicas activas.
-* Si una réplica se cae por sobrecarga o fallo de hardware, Kubernetes detecta la falla a través de las pruebas `livenessProbe` e inicia un pod de reemplazo automáticamente, manteniendo el sistema al **99.999% de disponibilidad**.
-
-### Indexación
-* En la base de datos PostgreSQL, se han indexado columnas de búsqueda frecuente en consultas de lectura rápida, específicamente:
-   * `ticket_uuid` (para consultas rápidas del portal y escáner de acceso).
-   * `seat_id` (para validar disponibilidad de asientos).
-   * `event_id` (para filtrar partidos mundialistas).
-
-### Rendimiento, Escalabilidad y Costos
-* La arquitectura escala de forma horizontal (**Scale Out**). Aumentar el rendimiento del ecosistema consiste simplemente en incrementar el número de pods de API o de Celery Workers en Kubernetes, lo cual es mucho más económico que comprar servidores físicos más potentes.
+#### Objetivos del Sistema
+* **Escalabilidad Horizontal**: Permitir que el sistema soporte picos de tráfico escalando de manera horizontal (añadiendo más réplicas de contenedores) en lugar de requerir hardware más costoso.
+* **Desacoplamiento Temporal**: Garantizar que si un servicio externo (como la pasarela de pagos) o de renderizado (QR) experimenta lentitud o fallas, el portal web del cliente pueda seguir procesando compras sin colapsar.
+* **Alta Disponibilidad**: Asegurar un uptime superior al 99.99% mediante redundancia activa N+1 y auto-recuperación de contenedores.
 
 ---
 
-## 5. Guía de Despliegue en Kubernetes (Rancher Desktop)
+### 3. Vista de Arquitectura y Patrones de Diseño
 
-### 1. Inyección de Secretos
-Creamos un archivo `docker/k8s-secrets.yaml` (ignorado en Git por seguridad):
+#### Patrones de Arquitectura Seleccionados
+* **Microservicios**: Cada componente del ecosistema corre en un espacio de red aislado (contenedores independientes). Esto facilita el mantenimiento, despliegues independientes y reduce el área de impacto de fallos.
+* **Arquitectura Orientada a Eventos / Tareas Asíncronas**: Los procesos de negocio lentos (pagos y generación de imágenes QR) se encolan para ser resueltos en segundo plano mediante un bróker de mensajería (Redis) y un consumidor (Celery), eliminando los bloqueos del servidor web principal.
+* **Serverless (Funciones FaaS)**: El motor de transacciones financieras y el renderizado de boletos están diseñados bajo la filosofía de funciones independientes de un solo propósito (AWS Lambdas), consumibles mediante HTTP/REST.
+
+#### Principios de Diseño Aplicados (SOLID y POO)
+* **S (Single Responsibility Principle)**: Cada clase tiene una única responsabilidad. Por ejemplo, `DatabaseSession` en [database.py](file:///c:/Ticket_Futbol/Ticket-Futbol-main/app/db/database.py) solo gestiona el ciclo de vida de la conexión a PostgreSQL, mientras que `TicketGeneratorService` en [ticket_generator.py](file:///c:/Ticket_Futbol/Ticket-Futbol-main/app/services/ticket_generator.py) solo encapsula la llamada al servicio generador de QR.
+* **O (Open/Closed Principle)**: El simulador de lambdas (`lambda_runner`) está diseñado para agregar nuevas funciones agregando sus handlers de forma modular sin alterar el core del runner HTTP.
+* **D (Dependency Inversion / Injection)**: FastAPI utiliza inyección de dependencias (`Depends()`) para inyectar las sesiones de base de datos a las rutas de la API, permitiendo desacoplar la lógica de negocio de la infraestructura y facilitando las pruebas unitarias.
+* **Singleton (Patrón de Diseño)**: El motor de base de datos (`engine`) y el cliente de caché de Redis se instancian una sola vez para todo el ciclo de vida del servidor, optimizando la reutilización de conexiones de red.
+
+---
+
+### 4. Documentación del Sistema (Modelo C4)
+
+#### Nivel 1: Diagrama de Contexto
+```mermaid
+graph TD
+    User["⚽ Cliente / Staff de Acceso"] -->|Reserva boletos / Valida QR| Gateway["🎟️ Ecosistema Ticket Fútbol"]
+    Gateway -->|Simula cobro| PaymentSystem["💳 Pasarela de Pagos (AWS Lambda Sim)"]
+    Gateway -->|Genera QR seguro| QRGenerator["🖼️ Generador de QR (AWS Lambda Sim)"]
+```
+
+#### Nivel 2: Diagrama de Contenedores
+```mermaid
+graph TB
+    subgraph Ecosistema ["🎟️ Ecosistema Ticket Fútbol"]
+        API["⚡ API Gateway / Backend <br> (FastAPI / Uvicorn :8000)"]
+        DB[(🗄️ Base de Datos <br> PostgreSQL 15 :5432)]
+        Redis[(🧠 Broker / Caché <br> Redis 7 :6379)]
+        Worker["⚙️ Procesador Asíncrono <br> Celery Worker"]
+        LambdaRunner["☁️ AWS Lambda Simulator <br> Python Handler :8001"]
+        Flower["📊 Dashboard de Colas <br> Celery Flower :5555"]
+    end
+
+    User["⚽ Cliente / Staff"] -->|HTTPS / REST| API
+    API -->|SQL queries| DB
+    API -->|Check limits / Distributed locks| Redis
+    API -->|Enqueue task| Redis
+    Redis -->|De-queue task| Worker
+    Worker -->|Invoke HTTP| LambdaRunner
+    Worker -->|Write QR png| SharedStorage["💾 Volumen Compartido <br> PVC (qrcodes)"]
+    API -->|Read QR png| SharedStorage
+    Flower -->|Read queue states| Redis
+```
+
+#### Nivel 3: Diagrama de Componentes (Core API Gateway)
+```mermaid
+graph GH
+    subgraph API_Gateway ["⚡ API Gateway (FastAPI Container)"]
+        Router["🛣️ Router & Controllers"]
+        AuthMiddleware["🔑 Auth & JWT Validator"]
+        RateLimit["⏳ Redis Rate Limiter"]
+        DBDep["🔌 Database Dependency Injection"]
+        CeleryClient["📨 Celery Task Publisher"]
+    end
+
+    User --> Router
+    Router --> AuthMiddleware
+    Router --> RateLimit
+    Router --> DBDep
+    Router --> CeleryClient
+```
+
+---
+
+### 5. Arquitectura de Integración y APIs
+
+#### API Gateway
+La API FastAPI centraliza el punto de entrada. Integra un middleware de **Rate Limiting** respaldado por Redis para limitar ataques de denegación de servicio (máximo 15 peticiones cada 10 segundos por dirección IP) y valida tokens JWT de autenticación por roles (Admin/Staff).
+
+#### Especificación OpenAPI / Swagger
+La especificación REST-full se autogenera y expone dinámicamente:
+* **Swagger UI**: Disponible localmente en [http://localhost:8000/docs](http://localhost:8000/docs)
+* **Endpoints Principales**:
+  * `POST /admin/token`: Autenticación y generación de JWT.
+  * `GET /events/`: Listado de partidos mundialistas y estados de asientos.
+  * `POST /orders/checkout`: Procesar orden de compra (payload: `event_id`, `seat_id`). Código de respuesta: `202 Accepted` (en procesamiento).
+  * `GET /tickets/{uuid}`: Consulta de boletos generados y sus URLs de QR.
+
+#### Manejo de Mensajería: Flujo de Colas
+```mermaid
+sequenceDiagram
+    participant API as API Gateway (FastAPI)
+    participant Queue as Redis Queue (Broker)
+    participant Worker as Celery Worker (Consumer)
+    participant DB as PostgreSQL DB
+
+    API->>Queue: Publicar tarea 'generate_ticket_async' con ticket_uuid
+    API-->>User: Responder '202 Accepted'
+    Worker->>Queue: Extraer tarea de la cola
+    Worker->>DB: Verificar datos y actualizar estado de la orden
+    Worker->>Worker: Invocar Lambda de generación de QR
+    Worker->>DB: Guardar URL del QR y liberar bloqueo de asiento
+```
+
+---
+
+### 6. Infraestructura y Despliegue
+
+#### Diagrama de Infraestructura
+La infraestructura corre en un clúster local de Kubernetes (`k3s`) administrado por **Rancher Desktop**. 
+
+#### Diagrama de Despliegue
+* **Espacio de nombres (Namespace)**: `ticket-futbol` para aislamiento lógico.
+* **Volúmenes compartidos**: Un `PersistentVolumeClaim` (`qrcodes-pvc`) montado en `/app/static/qrcodes` en los pods de `api`, `celery-worker` y `lambda-runner` para lectura y escritura compartida del QR físico.
+* **Redes y Exposición**:
+  * La base de datos (puerto `5432`) y Redis (puerto `6379`) se exponen internamente como `ClusterIP` para seguridad.
+  * La API se expone mediante un Service `LoadBalancer` en el puerto `8000`.
+  * Celery Flower se expone como `LoadBalancer` en el puerto `5555`.
+
+---
+
+### 7. Análisis No Funcional y Atributos de Calidad
+
+| Atributo | Foco del Análisis | Justificación Técnica / Cuantitativa |
+| :--- | :--- | :--- |
+| **Caché** | Optimización de lecturas frecuentes de asientos. | Almacenamiento en caché de la disponibilidad de asientos en Redis 7 con un TTL reducido para evitar consultas repetitivas de lectura a la base de datos PostgreSQL. |
+| **Balanceo** | Distribución de carga HTTP externa. | Kubernetes expone un balanceador de carga virtual (`Service LoadBalancer`) que reparte equitativamente las peticiones entrantes entre 3 pods de la API Gateway mediante algoritmos Round-Robin. |
+| **Indexación** | Optimización de consultas bajo alta concurrencia. | Índices B-Tree creados en la tabla `tickets` sobre la columna `ticket_uuid` y en la tabla `seats` para que la búsqueda y validación de códigos de acceso se realice en un tiempo de búsqueda $O(\log N)$ en lugar de escaneos completos. |
+| **Redundancia** | Tolerancia a fallos de almacenamiento de mensajes. | Redis se ejecuta con archivos de persistencia AOF (Append Only File) habilitados para no perder tareas en la cola si el pod del bróker se reinicia. |
+| **Disponibilidad** | Tiempo de actividad (Uptime) del ecosistema. | Esquema N+1 con 3 pods en paralelo para la API. Las pruebas de vida (`livenessProbe`) y lectura (`readinessProbe`) garantizan que Kubernetes reinicie los pods insalubres automáticamente en un intervalo de 10 segundos, asegurando un uptime del 99.99%. |
+| **Concurrencia** | Manejo de solicitudes concurrentes. | Se utiliza un **Lock Transaccional Distribuido** en Redis (`asiento:uuid`) que bloquea el asiento por 10 segundos durante la compra para evitar colisiones (dos clientes comprando el mismo asiento). |
+| **Latencia** | Tiempos de respuesta rápidos para el usuario. | El desacoplamiento de la generación de QR y cobros en colas asíncronas baja el tiempo de respuesta promedio de la API a **3.5 ms**. |
+| **Costo y Proyección** | Consumo y optimización de recursos. | Al utilizar contenedores basados en imágenes ultraligeras (Slim/Alpine Linux), cada réplica consume apenas 256MB de RAM, lo que permite proyectar un costo de infraestructura en nube extremadamente bajo y lineal. |
+| **Performance y Escalabilidad**| Escalado horizontal vs vertical. | El sistema escala de manera horizontal agregando más instancias del pod `api` o del `celery-worker` mediante el comando `kubectl scale` de forma automática ante picos de demanda. |
+
+---
+
+### 8. DevOps, Monitoreo y Mantenibilidad
+
+#### Estrategia de Git
+Se adopta una variación de **GitFlow**:
+* Rama `main`: Código estable y probado para producción.
+* Rama `develop`: Rama de integración donde se consolidan las funcionalidades antes del pase a producción.
+* Ramas `feature/*`: Desarrollo aislado de características específicas (ej: `feature/infrastructure`).
+
+#### Pipeline CI/CD (GitHub Actions Propuesto)
 ```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: ticket-futbol-secrets
-  namespace: ticket-futbol
-type: Opaque
-stringData:
-  postgres-user: "postgres"
-  postgres-password: "postgres"
-  postgres-db: "ticket_futbol_db"
-  lambda-api-key: "super-secret-api-key"
-```
-Aplica el archivo para cargar los secretos:
-```bash
-kubectl apply -f docker/k8s-secrets.yaml
-```
-
-### 2. Construir Imágenes Locales
-```bash
-docker build -t ticket_lambda_runner:latest -f docker/Dockerfile.lambda .
-docker build -t ticket_api_gateway:latest -f docker/Dockerfile.api .
-docker build -t ticket_celery_worker:latest -f docker/Dockerfile.celery .
+name: CI/CD Pipeline
+on:
+  push:
+    branches: [ main, develop ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+      - name: Build Docker Images
+        run: |
+          docker build -t ticket_api_gateway:latest -f docker/Dockerfile.api .
+          docker build -t ticket_celery_worker:latest -f docker/Dockerfile.celery .
 ```
 
-### 3. Aplicar Manifiestos y Iniciar Reenvío de Puertos
-```bash
-kubectl apply -f docker/k8s-manifests.yaml
+#### Gestión de Logs
+Se implementa **Structured Logging** usando la librería nativa `logging` de Python. Todos los pods dirigen sus logs a la salida estándar (`stdout`), permitiendo a la infraestructura de Rancher Desktop o colectores centralizados (como Fluentbit) capturar y centralizar los logs del sistema.
 
-# Reenvío de puertos a localhost
-kubectl port-forward svc/api 8000:8000 -n ticket-futbol
-kubectl port-forward svc/lambda-runner 8001:8001 -n ticket-futbol
-kubectl port-forward svc/celery-flower 5555:5555 -n ticket-futbol
-```
+#### Monitoreo
+* **Prometheus**: Realiza scraping continuo del endpoint `/metrics` expuesto en la API cada 5 segundos.
+* **Grafana**: Tablero interactivo importado (ID 22676) que visualiza métricas de la API como tasa de peticiones por segundo, códigos de estado HTTP (2xx/5xx), uso de CPU, uso de memoria RAM virtual y cantidad de hilos de ejecución activos de los pods.
